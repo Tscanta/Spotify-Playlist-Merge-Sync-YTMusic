@@ -1,11 +1,12 @@
-import os
-print("SPOTIPY_CLIENT_ID:", os.getenv("SPOTIPY_CLIENT_ID"))
-print("SPOTIPY_REDIRECT_URI:", repr(os.getenv("SPOTIPY_REDIRECT_URI")))
+from dotenv import load_dotenv
+load_dotenv()
 
+import os
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-from dotenv import load_dotenv
-import os
+
+print("SPOTIPY_CLIENT_ID:", os.getenv("SPOTIPY_CLIENT_ID"))
+print("SPOTIPY_REDIRECT_URI:", repr(os.getenv("SPOTIPY_REDIRECT_URI")))
 
 # Load environment variables from .env file
 load_dotenv()
