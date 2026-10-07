@@ -397,15 +397,34 @@ def sync_playlist(
         # SEARCH YOUTUBE MUSIC
         # --------------------------------------
 
-        results = ytm_client.search_track(
-            track_name,
-            track_artists,
-        )
+        candidates = []
+        for tier in range(1, 5):
+            results = ytm_client.search_track_tier(
+                track_name,
+                track_artists,
+                tier,
+            )
 
-        candidates = rank_candidates(
-            track,
-            results,
-        )
+            tier_candidates = rank_candidates(
+                track,
+                results,
+            )
+
+            if not tier_candidates:
+                continue
+
+            # Keep the best candidates we've found.
+            candidates.extend(tier_candidates)
+
+            # Re-rank everything discovered so far.
+            candidates.sort(
+                key=lambda candidate: candidate["score"],
+                reverse=True,
+            )
+
+            # We have a sufficiently confident match.
+            if candidates[0]["score"] >= 70:
+                break
 
         # --------------------------------------
         # NO RESULTS

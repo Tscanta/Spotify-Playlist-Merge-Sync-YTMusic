@@ -92,155 +92,205 @@ class YouTubeMusicClient:
         }
 
     def search_track(self, name, artists):
-        """
-        Search aggressively for a Spotify track.
+            """
+            Tiered YouTube Music search.
 
-        Multiple queries are used because YouTube Music's
-        search ranking can miss valid songs when the exact
-        Spotify title/artist combination is unusual.
-        """
+            Starts with the most precise query and only performs
+            broader searches when the previous search does not
+            produce enough useful candidates.
 
-        artist_text = " ".join(artists)
+            This reduces API requests for normal tracks while
+            still giving difficult tracks additional chances.
+            """
 
-        # Build several different searches.
-        queries = [
-            f"{name} {artist_text}",
-            name,
-            f"{artist_text} {name}",
-        ]
+            artist_text = " ".join(artists).strip()
 
-        # Remove duplicate/empty queries.
-        unique_queries = []
+            queries = [
+                # Tier 1 — precise
+                f"{name} {artist_text}".strip(),
 
-        for query in queries:
-            query = query.strip()
+                # Tier 2 — title only
+                name.strip(),
 
-            if query and query not in unique_queries:
-                unique_queries.append(query)
+                # Tier 3 — artist + title
+                f"{artist_text} {name}".strip(),
+            ]
 
-        candidates = []
-        seen_video_ids = set()
+            # Remove duplicate queries
+            unique_queries = []
 
-        for query in unique_queries:
+            for query in queries:
+                if query and query not in unique_queries:
+                    unique_queries.append(query)
 
-            # -------------------------------------------------
-            # Search 1: Songs with normal spelling correction
-            # -------------------------------------------------
+            candidates = []
+            seen_video_ids = set()
+
+            def collect(results):
+                new_count = 0
+
+                for result in results:
+                    candidate = self._normalize_search_result(result)
+
+                    if not candidate:
+                        continue
+
+                    video_id = candidate["video_id"]
+
+                    if video_id in seen_video_ids:
+                        continue
+
+                    seen_video_ids.add(video_id)
+                    candidates.append(candidate)
+                    new_count += 1
+
+                return new_count
+
+            # =========================================================
+            # TIER 1 — Exact title + artist
+            # =========================================================
 
             try:
                 results = self.ytmusic.search(
-                    query,
+                    unique_queries[0],
                     filter="songs",
-                    limit=20,
+                    limit=10,
                     ignore_spelling=False,
                 )
 
-                for result in results:
-                    candidate = self._normalize_search_result(result)
-
-                    if not candidate:
-                        continue
-
-                    video_id = candidate["video_id"]
-
-                    if video_id in seen_video_ids:
-                        continue
-
-                    seen_video_ids.add(video_id)
-                    candidates.append(candidate)
+                collect(results)
 
             except Exception:
                 pass
 
-            # -------------------------------------------------
-            # Search 2: Songs WITHOUT spelling correction
-            # -------------------------------------------------
+            # If we already have useful results, stop here.
+            if len(candidates) >= 5:
+                return candidates
 
-            try:
-                results = self.ytmusic.search(
-                    query,
-                    filter="songs",
-                    limit=20,
-                    ignore_spelling=True,
-                )
+            # =========================================================
+            # TIER 2 — Title only
+            # =========================================================
 
-                for result in results:
-                    candidate = self._normalize_search_result(result)
+            if len(unique_queries) >= 2:
 
-                    if not candidate:
-                        continue
+                try:
+                    results = self.ytmusic.search(
+                        unique_queries[1],
+                        filter="songs",
+                        limit=10,
+                        ignore_spelling=False,
+                    )
 
-                    video_id = candidate["video_id"]
+                    collect(results)
 
-                    if video_id in seen_video_ids:
-                        continue
+                except Exception:
+                    pass
 
-                    seen_video_ids.add(video_id)
-                    candidates.append(candidate)
+            # If we now have enough candidates, stop.
+            if len(candidates) >= 5:
+                return candidates
 
-            except Exception:
-                pass
+            # =========================================================
+            # TIER 3 — Artist + title
+            # =========================================================
 
-            # -------------------------------------------------
-            # Search 3: Unfiltered search
+            if len(unique_queries) >= 3:
+
+                try:
+                    results = self.ytmusic.search(
+                        unique_queries[2],
+                        filter="songs",
+                        limit=10,
+                        ignore_spelling=True,
+                    )
+
+                    collect(results)
+
+                except Exception:
+                    pass
+
+            # =========================================================
+            # TIER 4 — Broad/unfiltered search
             #
-            # This can expose results that don't appear in
-            # the "songs" filter.
-            # -------------------------------------------------
+            # Only used when the previous searches produced
+            # very little.
+            # =========================================================
 
-            try:
-                results = self.ytmusic.search(
-                    query,
-                    limit=20,
-                    ignore_spelling=False,
-                )
+            if len(candidates) < 3:
 
-                for result in results:
-                    candidate = self._normalize_search_result(result)
+                try:
+                    results = self.ytmusic.search(
+                        unique_queries[0],
+                        limit=10,
+                        ignore_spelling=True,
+                    )
 
-                    if not candidate:
-                        continue
+                    collect(results)
 
-                    video_id = candidate["video_id"]
+                except Exception:
+                    pass
 
-                    if video_id in seen_video_ids:
-                        continue
+            return candidates
 
-                    seen_video_ids.add(video_id)
-                    candidates.append(candidate)
+    def search_track_tier(self, name, artists, tier):
+            artist_text = " ".join(artists).strip()
 
-            except Exception:
-                pass
+            if tier == 1:
+                queries = [f"{name} {artist_text}".strip()]
+                options = {
+                    "filter": "songs",
+                    "limit": 10,
+                    "ignore_spelling": False,
+                }
 
-            # -------------------------------------------------
-            # Search 4: Unfiltered + ignore spelling
-            # -------------------------------------------------
+            elif tier == 2:
+                queries = [name.strip()]
+                options = {
+                    "filter": "songs",
+                    "limit": 10,
+                    "ignore_spelling": False,
+                }
 
-            try:
-                results = self.ytmusic.search(
-                    query,
-                    limit=20,
-                    ignore_spelling=True,
-                )
+            elif tier == 3:
+                queries = [f"{artist_text} {name}".strip()]
+                options = {
+                    "filter": "songs",
+                    "limit": 10,
+                    "ignore_spelling": True,
+                }
 
-                for result in results:
-                    candidate = self._normalize_search_result(result)
+            else:
+                queries = [f"{name} {artist_text}".strip()]
+                options = {
+                    "limit": 10,
+                    "ignore_spelling": True,
+                }
 
-                    if not candidate:
-                        continue
+            candidates = []
+            seen = set()
 
-                    video_id = candidate["video_id"]
+            for query in queries:
+                try:
+                    results = self.ytmusic.search(query, **options)
 
-                    if video_id in seen_video_ids:
-                        continue
+                    for result in results:
+                        candidate = self._normalize_search_result(result)
 
-                    seen_video_ids.add(video_id)
-                    candidates.append(candidate)
+                        if not candidate:
+                            continue
 
-            except Exception:
-                pass
+                        video_id = candidate["video_id"]
 
-        return candidates
+                        if video_id in seen:
+                            continue
+
+                        seen.add(video_id)
+                        candidates.append(candidate)
+
+                except Exception:
+                    pass
+
+            return candidates
 
     def add_tracks(self, playlist_id, video_ids):
         if not video_ids:
