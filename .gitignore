@@ -1,5 +1,9 @@
 venv/
-.env
 __pycache__/
+.env
+browser.json
+oauth.json
+.spotify_cache
+sync_config.json
 .cache
-*.pyc
+.vscode
