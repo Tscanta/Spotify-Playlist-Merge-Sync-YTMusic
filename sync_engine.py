@@ -1,6 +1,8 @@
 import sys
 import webbrowser
 import re
+import json
+import os
 import spotify_client as spotify_api
 from track_matcher import (
     find_best_match,
@@ -12,6 +14,75 @@ def normalize(text):
     return " ".join(
         text.lower().strip().split()
     )
+
+CACHE_FILE = ".ytm_cache.json"
+
+
+def track_cache_key(track):
+    """
+    Create a stable cache key from Spotify track title + artists.
+    """
+
+    name = normalize(track.get("name", ""))
+
+    artists = "|".join(
+        normalize(artist)
+        for artist in track.get("artists", [])
+    )
+
+    return f"{name}|{artists}"
+
+
+def load_cache():
+    """
+    Load the local YouTube Music match cache.
+    """
+
+    if not os.path.exists(CACHE_FILE):
+        return {}
+
+    try:
+        with open(
+            CACHE_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            data = json.load(file)
+
+        if isinstance(data, dict):
+            return data
+
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ):
+        pass
+
+    return {}
+
+
+def save_cache(cache):
+    """
+    Save the local YouTube Music match cache.
+    """
+
+    try:
+        with open(
+            CACHE_FILE,
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                cache,
+                file,
+                indent=2,
+                ensure_ascii=False,
+            )
+
+    except OSError as e:
+        print(
+            f"\n  ⚠ Could not save YT Music cache: {e}"
+        )
 
 
 def find_ytm_playlist(
@@ -225,7 +296,7 @@ def sync_playlist(
     manual_mode=True,
 ):
     name = spotify_playlist["name"]
-
+    cache = load_cache()
     print(f"\n▶ {name}")
 
     # ------------------------------------------
@@ -394,11 +465,38 @@ def sync_playlist(
             continue
 
         # --------------------------------------
+        # CACHE LOOKUP
+        # --------------------------------------
+
+        cache_key = track_cache_key(track)
+        cached = cache.get(cache_key)
+
+        if cached:
+            cached_video_id = cached.get("video_id")
+            cached_score = cached.get("score", 0)
+
+            if cached_video_id:
+                print(
+                    f"\n    ✓ Cache hit: "
+                    f"{track_name} — "
+                    f"{', '.join(track_artists)}"
+                )
+
+                tracks_to_add.append(cached_video_id)
+                automatic_matches += 1
+
+                progress(index, total)
+                continue
+
+
+        # --------------------------------------
         # SEARCH YOUTUBE MUSIC
         # --------------------------------------
 
         candidates = []
+
         for tier in range(1, 5):
+
             results = ytm_client.search_track_tier(
                 track_name,
                 track_artists,
@@ -413,16 +511,30 @@ def sync_playlist(
             if not tier_candidates:
                 continue
 
-            # Keep the best candidates we've found.
             candidates.extend(tier_candidates)
 
-            # Re-rank everything discovered so far.
+            # Remove duplicate video IDs.
+            unique_candidates = {}
+
+            for candidate in candidates:
+                video_id = candidate["video_id"]
+
+                if video_id not in unique_candidates:
+                    unique_candidates[video_id] = candidate
+
+            candidates = list(
+                unique_candidates.values()
+            )
+
             candidates.sort(
                 key=lambda candidate: candidate["score"],
                 reverse=True,
             )
 
-            # We have a sufficiently confident match.
+            # ----------------------------------
+            # SCORE-AWARE EARLY STOP
+            # ----------------------------------
+
             if candidates[0]["score"] >= 70:
                 break
 
@@ -454,8 +566,19 @@ def sync_playlist(
         # ---------------------------------------------------------
 
         if best_score >= 70:
-            tracks_to_add.append(best["video_id"])
+            tracks_to_add.append(
+                best["video_id"]
+            )
+
+            cache[cache_key] = {
+                "video_id": best["video_id"],
+                "score": best_score,
+            }
+
+            save_cache(cache)
+
             automatic_matches += 1
+
             progress(index, total)
             continue
 
@@ -471,11 +594,19 @@ def sync_playlist(
             )
 
             if selected:
-
                 tracks_to_add.append(
                     selected["video_id"]
                 )
 
+                cache[cache_key] = {
+                    "video_id": selected["video_id"],
+                    "score": selected.get(
+                        "score",
+                        100,
+                    ),
+                }
+
+                save_cache(cache)
                 manually_selected += 1
 
         else:

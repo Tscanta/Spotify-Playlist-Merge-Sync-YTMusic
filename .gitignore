@@ -7,3 +7,4 @@ oauth.json
 sync_config.json
 .cache
 .vscode
+.ytm_cache.json
