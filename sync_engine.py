@@ -1,6 +1,6 @@
 import sys
 import webbrowser
-
+import re
 import spotify_client as spotify_api
 from track_matcher import (
     find_best_match,
@@ -70,145 +70,147 @@ def progress(current, total):
 # MANUAL MATCH SELECTION
 # ============================================================
 
-def ask_user_for_match(
-    spotify_track,
-    candidates,
-):
-    """
-    Show the best YouTube Music candidates and let the user
-    manually select one.
+def ask_user_for_match(spotify_track, candidates):
+    print()
+    print("=" * 55)
+    print("                  UNCERTAIN MATCH")
+    print("=" * 55)
 
-    Returns:
-        candidate dict
-        None if skipped
-    """
-
-    print("\n")
-    print("=" * 60)
-    print("              UNCERTAIN MATCH")
-    print("=" * 60)
-
-    spotify_name = spotify_track.get(
-        "name",
-        "",
-    )
-
-    spotify_artists = ", ".join(
-        spotify_track.get(
-            "artists",
-            [],
-        )
-    )
-
-    print("\nSpotify:")
+    print()
+    print("Spotify:")
     print(
-        f"  {spotify_name} — "
-        f"{spotify_artists}"
+        f"    {spotify_track['name']} — "
+        f"{', '.join(spotify_track['artists'])}"
     )
 
-    print("\nYouTube Music candidates:")
+    print()
+    print("YouTube Music candidates:")
+    print()
 
-    # Only show the top 3.
-    shown_candidates = candidates[:3]
+    for index, candidate in enumerate(candidates[:3], start=1):
+        print("-" * 55)
 
-    for index, candidate in enumerate(
-        shown_candidates,
-        1,
-    ):
-        print("\n" + "-" * 55)
+        print(f"[{index}] {candidate.get('name', 'Unknown')}")
 
-        print(
-            f"[{index}] "
-            f"{candidate['name']}"
-        )
-
-        artists = ", ".join(
-            candidate.get(
-                "artists",
-                [],
-            )
-        )
-
+        artists = candidate.get("artists", [])
         if artists:
-            print(
-                f"    Artist: {artists}"
-            )
+            print(f"    Artist: {', '.join(artists)}")
 
-        if candidate.get("album"):
-            print(
-                f"    Album: "
-                f"{candidate['album']}"
-            )
+        album = candidate.get("album")
+        if album:
+            print(f"    Album: {album}")
 
-        print(
-            f"    Score: "
-            f"{candidate['score']}"
-        )
+        print(f"    Score: {candidate.get('score', 0)}")
 
-        versions = candidate.get(
-            "versions",
-            [],
-        )
-
-        if versions:
-            print(
-                f"    Version: "
-                f"{', '.join(versions)}"
-            )
-
-        video_id = candidate.get(
-            "video_id"
-        )
+        video_id = candidate.get("video_id")
 
         if video_id:
-            url = (
-                "https://music.youtube.com/"
-                f"watch?v={video_id}"
-            )
-
             print(
-                f"    Link: {url}"
+                "    Link: "
+                f"https://music.youtube.com/watch?v={video_id}"
             )
 
-    print("\n" + "-" * 55)
-
-    print("[S] Skip this song")
+    print()
+    print("[L] Enter YouTube Music link manually")
+    print("[S] Skip")
 
     while True:
+        choice = input("\nChoose: ").strip()
 
-        choice = input(
-            "\nChoose a match "
-            "[1-3/S]: "
-        ).strip().lower()
-
-        if choice == "s":
-            print(
-                "  → Skipped."
-            )
-            return None
+        # -------------------------------------------------
+        # Select one of the displayed candidates
+        # -------------------------------------------------
 
         if choice.isdigit():
-
             number = int(choice)
 
-            if 1 <= number <= len(
-                shown_candidates
-            ):
-                selected = shown_candidates[
-                    number - 1
-                ]
+            if 1 <= number <= min(3, len(candidates)):
+                return candidates[number - 1]
 
+            print("Invalid candidate number.")
+            continue
+
+        # -------------------------------------------------
+        # Manual YouTube Music link
+        # -------------------------------------------------
+
+        if choice.lower() == "l":
+
+            while True:
+                link = input(
+                    "\nPaste YouTube Music link: "
+                ).strip()
+
+                video_id = extract_youtube_video_id(link)
+
+                if not video_id:
+                    print(
+                        "Could not extract a YouTube Music "
+                        "video ID from that link."
+                    )
+                    print(
+                        "Example:"
+                    )
+                    print(
+                        "https://music.youtube.com/watch?v=XXXXXXXXXXX"
+                    )
+                    continue
+
+                print()
                 print(
-                    f"  ✓ Selected: "
-                    f"{selected['name']}"
+                    f"Manual track selected: {video_id}"
                 )
 
-                return selected
+                return {
+                    "video_id": video_id,
+                    "manual": True,
+                    "score": 100,
+                }
 
-        print(
-            "  Invalid choice. "
-            "Enter 1, 2, 3, or S."
-        )
+        # -------------------------------------------------
+        # Skip
+        # -------------------------------------------------
+
+        if choice.lower() == "s":
+            return None
+
+        print("Invalid choice. Enter 1, 2, 3, L, or S.")
+
+
+def extract_youtube_video_id(link):
+    """
+    Extract a YouTube / YouTube Music video ID.
+
+    Supports:
+
+        https://music.youtube.com/watch?v=XXXXXXXXXXX
+
+        https://www.youtube.com/watch?v=XXXXXXXXXXX
+
+        https://youtu.be/XXXXXXXXXXX
+    """
+
+    if not link:
+        return None
+
+    link = link.strip()
+
+    patterns = [
+        r"[?&]v=([A-Za-z0-9_-]{11})",
+        r"youtu\.be/([A-Za-z0-9_-]{11})",
+        r"youtube\.com/shorts/([A-Za-z0-9_-]{11})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, link)
+
+        if match:
+            return match.group(1)
+
+    # Allow the user to paste just the video ID.
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", link):
+        return link
+
+    return None
 
 
 # ============================================================
@@ -420,47 +422,22 @@ def sync_playlist(
 
             continue
 
-        # --------------------------------------
-        # BEST CANDIDATE
-        # --------------------------------------
-
         best = candidates[0]
-
-        second_score = (
-            candidates[1]["score"]
-            if len(candidates) > 1
-            else 0
-        )
-
         best_score = best["score"]
 
-        gap = (
-            best_score - second_score
-            if len(candidates) > 1
-            else best_score
-        )
+        # ---------------------------------------------------------
+        # Automatic matching
+        #
+        # 70+ is considered good enough.
+        #
+        # Candidate #1 is the highest-ranked result, so even if
+        # candidate #2 has a similar score, we accept #1.
+        # ---------------------------------------------------------
 
-    # ------------------------------------------------------
-    # VERY HIGH CONFIDENCE
-    # ------------------------------------------------------
-    # If the best candidate is 90+, trust it even if
-    # another candidate is also above 90.
-
-        if best_score >= 90:
+        if best_score >= 70:
             tracks_to_add.append(best["video_id"])
             automatic_matches += 1
-            progress(index,total)
-            continue
-
-    # ------------------------------------------------------
-    # NORMAL HIGH CONFIDENCE
-    # ------------------------------------------------------
-    # Below 90, require a clear gap between candidates.
-
-        if ( best_score >= 70 and gap >= 8 ):
-            tracks_to_add.append(best["video_id"])
-            automatic_matches += 1
-            progress(index,total)
+            progress(index, total)
             continue
 
         # --------------------------------------
