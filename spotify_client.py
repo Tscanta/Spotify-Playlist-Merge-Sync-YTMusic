@@ -37,7 +37,7 @@ def get_tracks(sp, playlist_id):
     results = sp.playlist_items(
         playlist_id,
         limit=100,
-        fields="items(track(id,name,duration_ms,artists(name),is_local)),next",
+        fields="items(track(id,name,duration_ms,album(name),artists(name),is_local)),next",
     )
 
     while results:
@@ -54,6 +54,7 @@ def get_tracks(sp, playlist_id):
                     artist["name"]
                     for artist in track["artists"]
                 ],
+                "album": track["album"]["name"],
                 "duration_seconds": (
                     track["duration_ms"] / 1000
                 ),

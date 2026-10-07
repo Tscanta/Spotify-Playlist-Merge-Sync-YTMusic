@@ -1,7 +1,11 @@
 import sys
-import time
+import webbrowser
 
-from track_matcher import find_best_match
+import spotify_client as spotify_api
+from track_matcher import (
+    find_best_match,
+    rank_candidates,
+)
 
 
 def normalize(text):
@@ -14,9 +18,7 @@ def find_ytm_playlist(
     ytm_playlists,
     spotify_name,
 ):
-    target = normalize(
-        spotify_name
-    )
+    target = normalize(spotify_name)
 
     for playlist in ytm_playlists:
         if normalize(
@@ -64,21 +66,173 @@ def progress(current, total):
         print()
 
 
+# ============================================================
+# MANUAL MATCH SELECTION
+# ============================================================
+
+def ask_user_for_match(
+    spotify_track,
+    candidates,
+):
+    """
+    Show the best YouTube Music candidates and let the user
+    manually select one.
+
+    Returns:
+        candidate dict
+        None if skipped
+    """
+
+    print("\n")
+    print("=" * 60)
+    print("              UNCERTAIN MATCH")
+    print("=" * 60)
+
+    spotify_name = spotify_track.get(
+        "name",
+        "",
+    )
+
+    spotify_artists = ", ".join(
+        spotify_track.get(
+            "artists",
+            [],
+        )
+    )
+
+    print("\nSpotify:")
+    print(
+        f"  {spotify_name} — "
+        f"{spotify_artists}"
+    )
+
+    print("\nYouTube Music candidates:")
+
+    # Only show the top 3.
+    shown_candidates = candidates[:3]
+
+    for index, candidate in enumerate(
+        shown_candidates,
+        1,
+    ):
+        print("\n" + "-" * 55)
+
+        print(
+            f"[{index}] "
+            f"{candidate['name']}"
+        )
+
+        artists = ", ".join(
+            candidate.get(
+                "artists",
+                [],
+            )
+        )
+
+        if artists:
+            print(
+                f"    Artist: {artists}"
+            )
+
+        if candidate.get("album"):
+            print(
+                f"    Album: "
+                f"{candidate['album']}"
+            )
+
+        print(
+            f"    Score: "
+            f"{candidate['score']}"
+        )
+
+        versions = candidate.get(
+            "versions",
+            [],
+        )
+
+        if versions:
+            print(
+                f"    Version: "
+                f"{', '.join(versions)}"
+            )
+
+        video_id = candidate.get(
+            "video_id"
+        )
+
+        if video_id:
+            url = (
+                "https://music.youtube.com/"
+                f"watch?v={video_id}"
+            )
+
+            print(
+                f"    Link: {url}"
+            )
+
+    print("\n" + "-" * 55)
+
+    print("[S] Skip this song")
+
+    while True:
+
+        choice = input(
+            "\nChoose a match "
+            "[1-3/S]: "
+        ).strip().lower()
+
+        if choice == "s":
+            print(
+                "  → Skipped."
+            )
+            return None
+
+        if choice.isdigit():
+
+            number = int(choice)
+
+            if 1 <= number <= len(
+                shown_candidates
+            ):
+                selected = shown_candidates[
+                    number - 1
+                ]
+
+                print(
+                    f"  ✓ Selected: "
+                    f"{selected['name']}"
+                )
+
+                return selected
+
+        print(
+            "  Invalid choice. "
+            "Enter 1, 2, 3, or S."
+        )
+
+
+# ============================================================
+# SYNC ONE PLAYLIST
+# ============================================================
+
 def sync_playlist(
-    spotify_client,
+    sp,
     ytm_client,
     spotify_playlist,
     ytm_playlists,
+    manual_mode=True,
 ):
     name = spotify_playlist["name"]
-    spotify_id = spotify_playlist["id"]
 
     print(f"\n▶ {name}")
 
-    spotify_tracks = (
-        spotify_client.get_tracks(
-            spotify_id
-        )
+    # ------------------------------------------
+    # GET SPOTIFY TRACKS
+    # ------------------------------------------
+
+    spotify_tracks = spotify_api.get_tracks(
+        sp,
+        spotify_playlist["id"],
     )
 
     print(
@@ -87,7 +241,7 @@ def sync_playlist(
     )
 
     # ------------------------------------------
-    # FIND OR CREATE PLAYLIST
+    # FIND OR CREATE YT MUSIC PLAYLIST
     # ------------------------------------------
 
     ytm_playlist = find_ytm_playlist(
@@ -98,7 +252,8 @@ def sync_playlist(
     if not ytm_playlist:
 
         print(
-            "  ⚠ YT Music playlist doesn't exist."
+            "  ⚠ YT Music playlist "
+            "doesn't exist."
         )
 
         print(
@@ -153,32 +308,75 @@ def sync_playlist(
 
         existing.add(
             (
-                normalize(track["name"]),
+                normalize(
+                    track.get(
+                        "name",
+                        "",
+                    )
+                ),
                 tuple(
                     normalize(a)
-                    for a in track["artists"]
+                    for a in track.get(
+                        "artists",
+                        [],
+                    )
                 ),
             )
         )
 
     tracks_to_add = []
     unmatched = []
+    manually_selected = 0
     already_exists = 0
+    automatic_matches = 0
 
     print("\n  Searching tracks...")
 
     total = len(spotify_tracks)
+
+    # ------------------------------------------
+    # MATCH TRACKS
+    # ------------------------------------------
 
     for index, track in enumerate(
         spotify_tracks,
         1,
     ):
 
+        track_name = track.get(
+            "name",
+            "",
+        ).strip()
+
+        track_artists = track.get(
+            "artists",
+            [],
+        )
+
+        # --------------------------------------
+        # INVALID / EMPTY SPOTIFY TRACK
+        # --------------------------------------
+
+        if not track_name:
+
+            unmatched.append(track)
+
+            progress(
+                index,
+                total,
+            )
+
+            continue
+
+        # --------------------------------------
+        # EXISTING TRACK
+        # --------------------------------------
+
         key = (
-            normalize(track["name"]),
+            normalize(track_name),
             tuple(
                 normalize(a)
-                for a in track["artists"]
+                for a in track_artists
             ),
         )
 
@@ -186,31 +384,112 @@ def sync_playlist(
 
             already_exists += 1
 
-            progress(index, total)
+            progress(
+                index,
+                total,
+            )
 
             continue
 
+        # --------------------------------------
+        # SEARCH YOUTUBE MUSIC
+        # --------------------------------------
+
         results = ytm_client.search_track(
-            track["name"],
-            track["artists"],
+            track_name,
+            track_artists,
         )
 
-        match = find_best_match(
+        candidates = rank_candidates(
             track,
             results,
         )
 
-        if match:
+        # --------------------------------------
+        # NO RESULTS
+        # --------------------------------------
 
-            tracks_to_add.append(
-                match["video_id"]
+        if not candidates:
+
+            unmatched.append(track)
+
+            progress(
+                index,
+                total,
             )
+
+            continue
+
+        # --------------------------------------
+        # BEST CANDIDATE
+        # --------------------------------------
+
+        best = candidates[0]
+
+        second_score = (
+            candidates[1]["score"]
+            if len(candidates) > 1
+            else 0
+        )
+
+        best_score = best["score"]
+
+        gap = (
+            best_score - second_score
+            if len(candidates) > 1
+            else best_score
+        )
+
+    # ------------------------------------------------------
+    # VERY HIGH CONFIDENCE
+    # ------------------------------------------------------
+    # If the best candidate is 90+, trust it even if
+    # another candidate is also above 90.
+
+        if best_score >= 90:
+            tracks_to_add.append(best["video_id"])
+            automatic_matches += 1
+            progress(index,total)
+            continue
+
+    # ------------------------------------------------------
+    # NORMAL HIGH CONFIDENCE
+    # ------------------------------------------------------
+    # Below 90, require a clear gap between candidates.
+
+        if ( best_score >= 70 and gap >= 8 ):
+            tracks_to_add.append(best["video_id"])
+            automatic_matches += 1
+            progress(index,total)
+            continue
+
+        # --------------------------------------
+        # UNCERTAIN / LOW CONFIDENCE
+        # --------------------------------------
+
+        if manual_mode:
+
+            selected = ask_user_for_match(
+                track,
+                candidates,
+            )
+
+            if selected:
+
+                tracks_to_add.append(
+                    selected["video_id"]
+                )
+
+                manually_selected += 1
 
         else:
 
             unmatched.append(track)
 
-        progress(index, total)
+        progress(
+            index,
+            total,
+        )
 
     # ------------------------------------------
     # SUMMARY
@@ -222,17 +501,27 @@ def sync_playlist(
     )
 
     print(
-        f"  Matches to add: "
+        f"  Automatic matches: "
+        f"{automatic_matches}"
+    )
+
+    print(
+        f"  Manual matches: "
+        f"{manually_selected}"
+    )
+
+    print(
+        f"  Total to add: "
         f"{len(tracks_to_add)}"
     )
 
     print(
-        f"  Unmatched: "
+        f"  Unmatched/skipped: "
         f"{len(unmatched)}"
     )
 
     # ------------------------------------------
-    # ADD
+    # ADD TO YOUTUBE MUSIC
     # ------------------------------------------
 
     if tracks_to_add:
@@ -241,28 +530,38 @@ def sync_playlist(
             "\n  Adding matched tracks..."
         )
 
-        for start in range(
-            0,
-            len(tracks_to_add),
-            50,
-        ):
+        results = ytm_client.add_tracks(
+            ytm_playlist_id,
+            tracks_to_add,
+        )
 
-            batch = tracks_to_add[
-                start:start + 50
-            ]
+        added = 0
+        failed = 0
 
-            ytm_client.add_tracks(
-                ytm_playlist_id,
-                batch,
-            )
+        for result in results:
 
-            progress(
-                min(
-                    start + len(batch),
-                    len(tracks_to_add),
-                ),
-                len(tracks_to_add),
-            )
+            if result["success"]:
+                added += 1
+            else:
+                failed += 1
+
+                print(
+                    f"\n  ✗ Failed to add "
+                    f"{result['video_id']}"
+                )
+
+                print(
+                    f"    Reason: "
+                    f"{result['error']}"
+                )
+
+        print(
+            f"\n  Added successfully: {added}"
+        )
+
+        print(
+            f"  Failed: {failed}"
+        )
 
     else:
 
@@ -277,20 +576,46 @@ def sync_playlist(
     if unmatched:
 
         print(
-            "\n  Could not confidently match:"
+            "\n  Could not match:"
         )
 
         for track in unmatched:
 
-            print(
-                f"    ⚠ {track['name']} — "
-                f"{', '.join(track['artists'])}"
+            track_name = track.get(
+                "name",
+                "",
             )
+
+            artists = ", ".join(
+                track.get(
+                    "artists",
+                    [],
+                )
+            )
+
+            if track_name:
+
+                print(
+                    f"    ⚠ "
+                    f"{track_name}"
+                    f" — {artists}"
+                )
+
+            else:
+
+                print(
+                    "    ⚠ Empty/invalid "
+                    "Spotify track"
+                )
 
     print(
         f"\n  ✓ Finished: {name}"
     )
 
+
+# ============================================================
+# SYNC
+# ============================================================
 
 def sync(
     spotify_client,
@@ -299,9 +624,11 @@ def sync(
     config,
 ):
     if not config["playlists"]:
+
         print(
             "\nNo playlists selected."
         )
+
         return
 
     print("\n" + "=" * 55)
@@ -309,7 +636,8 @@ def sync(
     print("=" * 55)
 
     print(
-        "\nThis will MODIFY your YouTube Music account."
+        "\nThis will MODIFY your "
+        "YouTube Music account."
     )
 
     print(
@@ -319,6 +647,7 @@ def sync(
     print("\nPlaylists selected:")
 
     for playlist in config["playlists"]:
+
         print(
             f"  • {playlist['name']}"
         )
@@ -336,7 +665,13 @@ def sync(
     )
 
     print(
-        "  - It will NOT remove YT Music tracks"
+        "  + Let you manually choose "
+        "uncertain matches"
+    )
+
+    print(
+        "  - It will NOT remove "
+        "YT Music tracks"
     )
 
     print(
@@ -348,10 +683,48 @@ def sync(
     ).strip().lower()
 
     if confirmation != "y":
+
         print(
-            "\nSync cancelled. Nothing changed."
+            "\nSync cancelled. "
+            "Nothing changed."
         )
+
         return
+
+    # ------------------------------------------
+    # MATCHING MODE
+    # ------------------------------------------
+
+    print("\nMatching mode:")
+
+    print(
+        "  [1] Manual confirmation "
+        "(recommended)"
+    )
+
+    print(
+        "  [2] Automatic"
+    )
+
+    while True:
+
+        mode = input(
+            "\nChoose [1/2]: "
+        ).strip()
+
+        if mode == "1":
+
+            manual_mode = True
+            break
+
+        if mode == "2":
+
+            manual_mode = False
+            break
+
+        print(
+            "  Invalid choice."
+        )
 
     print("\nStarting sync...")
 
@@ -388,6 +761,7 @@ def sync(
                 ytm_client,
                 spotify_playlist,
                 ytm_playlists,
+                manual_mode,
             )
 
         except Exception as e:

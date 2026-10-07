@@ -64,10 +64,29 @@ class YouTubeMusicClient:
 
     def add_tracks(self, playlist_id, video_ids):
         if not video_ids:
-            return None
+            return []
 
-        return self.ytmusic.add_playlist_items(
-            playlist_id,
-            videoIds=video_ids,
-            duplicates=False,
-        )
+        results = []
+
+        for video_id in video_ids:
+            try:
+                result = self.ytmusic.add_playlist_items(
+                    playlist_id,
+                    videoIds=[video_id],
+                    duplicates=False,
+                )
+
+                results.append({
+                    "video_id": video_id,
+                    "success": True,
+                    "response": result,
+                })
+
+            except Exception as e:
+                results.append({
+                    "video_id": video_id,
+                    "success": False,
+                    "error": str(e),
+                })
+
+        return results
