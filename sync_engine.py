@@ -454,14 +454,11 @@ def sync_playlist(
         )
 
         if key in existing:
-
             already_exists += 1
-
             progress(
                 index,
                 total,
             )
-
             continue
 
         # --------------------------------------
@@ -483,6 +480,7 @@ def sync_playlist(
                 )
 
                 tracks_to_add.append(cached_video_id)
+                existing.add(key)
                 automatic_matches += 1
 
                 progress(index, total)
@@ -542,16 +540,24 @@ def sync_playlist(
         # NO RESULTS
         # --------------------------------------
 
+        
         if not candidates:
+            if manual_mode:
+                print("\n  No search candidates found.")
+                selected = ask_user_for_match(track, [])
 
-            unmatched.append(track)
+                if selected:
+                    tracks_to_add.append(selected["video_id"])
+                    existing.add(key)
+                    manually_selected += 1
+                else:
+                    unmatched.append(track)
+            else:
+                unmatched.append(track)
 
-            progress(
-                index,
-                total,
-            )
-
+            progress(index, total)
             continue
+
 
         best = candidates[0]
         best_score = best["score"]
@@ -569,6 +575,7 @@ def sync_playlist(
             tracks_to_add.append(
                 best["video_id"]
             )
+            existing.add(key)
 
             cache[cache_key] = {
                 "video_id": best["video_id"],

@@ -233,64 +233,46 @@ class YouTubeMusicClient:
             return candidates
 
     def search_track_tier(self, name, artists, tier):
-            artist_text = " ".join(artists).strip()
+        """Search one tier and return raw ytmusicapi results.
 
-            if tier == 1:
-                queries = [f"{name} {artist_text}".strip()]
-                options = {
-                    "filter": "songs",
-                    "limit": 10,
-                    "ignore_spelling": False,
-                }
+        track_matcher.rank_candidates expects the original ytmusicapi keys
+        (title, videoId, resultType, and artist dictionaries). Returning the
+        normalized schema here silently caused every result to be discarded.
+        """
+        artist_text = " ".join(artists).strip()
 
-            elif tier == 2:
-                queries = [name.strip()]
-                options = {
-                    "filter": "songs",
-                    "limit": 10,
-                    "ignore_spelling": False,
-                }
+        if tier == 1:
+            query = f"{name} {artist_text}".strip()
+            options = {"filter": "songs", "limit": 10, "ignore_spelling": False}
+        elif tier == 2:
+            query = name.strip()
+            options = {"filter": "songs", "limit": 10, "ignore_spelling": False}
+        elif tier == 3:
+            query = f"{artist_text} {name}".strip()
+            options = {"filter": "songs", "limit": 10, "ignore_spelling": True}
+        else:
+            query = f"{name} {artist_text}".strip()
+            options = {"limit": 10, "ignore_spelling": True}
 
-            elif tier == 3:
-                queries = [f"{artist_text} {name}".strip()]
-                options = {
-                    "filter": "songs",
-                    "limit": 10,
-                    "ignore_spelling": True,
-                }
+        try:
+            results = self.ytmusic.search(query, **options) or []
+        except Exception as e:
+            print(f"\n  YT Music search error for {query!r}: {type(e).__name__}: {e}")
+            return []
 
-            else:
-                queries = [f"{name} {artist_text}".strip()]
-                options = {
-                    "limit": 10,
-                    "ignore_spelling": True,
-                }
+        candidates = []
+        seen = set()
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            video_id = result.get("videoId") or result.get("video_id")
+            if not video_id or video_id in seen:
+                continue
+            seen.add(video_id)
+            # Keep the raw result shape for track_matcher; don't normalize it here.
+            candidates.append(result)
 
-            candidates = []
-            seen = set()
-
-            for query in queries:
-                try:
-                    results = self.ytmusic.search(query, **options)
-
-                    for result in results:
-                        candidate = self._normalize_search_result(result)
-
-                        if not candidate:
-                            continue
-
-                        video_id = candidate["video_id"]
-
-                        if video_id in seen:
-                            continue
-
-                        seen.add(video_id)
-                        candidates.append(candidate)
-
-                except Exception:
-                    pass
-
-            return candidates
+        return candidates
 
     def add_tracks(self, playlist_id, video_ids):
         if not video_ids:
