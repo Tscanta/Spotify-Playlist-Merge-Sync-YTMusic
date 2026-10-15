@@ -1,5 +1,9 @@
 # SpotifyPlaylistMerger
 
+
+https://github.com/user-attachments/assets/99bf924b-812c-4fdf-a8c6-f8b1b58870ce
+
+
 A command-line Python project with **two independent features**:
 
 1. **Spotify Playlist Merger** — merge multiple Spotify playlists into one Spotify playlist.
